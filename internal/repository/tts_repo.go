@@ -56,6 +56,29 @@ func (r *csvTTSRepository) SaveAll(entries []model.TTSLogEntry) error {
 	return WriteCSV(r.filePath, records)
 }
 
+// Save saves a single TTS log entry to the CSV file.
+func (r *csvTTSRepository) Save(entry model.TTSLogEntry) error {
+	entries, err := r.LoadAll()
+	if err != nil {
+		return err
+	}
+
+	found := false
+	for i, e := range entries {
+		if e.Date == entry.Date && e.Task == entry.Task {
+			entries[i] = entry
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		entries = append(entries, entry)
+	}
+
+	return r.SaveAll(entries)
+}
+
 func (r *csvTTSRepository) parseRecord(record []string) (model.TTSLogEntry, error) {
 	var entry model.TTSLogEntry
 
