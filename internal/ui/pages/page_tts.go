@@ -8,8 +8,10 @@ import (
 )
 
 type TTSPage struct {
-	Theme *material.Theme
-	Table *widgets.EditableTable
+	Theme    *material.Theme
+	Table    *widgets.EditableTable
+	SaveBtn  widget.Clickable
+	SyncBtn  widget.Clickable
 }
 
 func NewTTSPage(th *material.Theme) *TTSPage {
@@ -30,5 +32,15 @@ func NewTTSPage(th *material.Theme) *TTSPage {
 }
 
 func (p *TTSPage) Layout(gtx layout.Context) layout.Dimensions {
-	return p.Table.Layout(gtx, p.Theme)
+	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+			return p.Table.Layout(gtx, p.Theme)
+		}),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return layout.Flex{}.Layout(gtx,
+				layout.Flexed(1, material.Button(p.Theme, &p.SaveBtn, "Save").Layout),
+				layout.Flexed(1, material.Button(p.Theme, &p.SyncBtn, "Sync to Jira").Layout),
+			)
+		}),
+	)
 }
