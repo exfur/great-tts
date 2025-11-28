@@ -1,0 +1,1557 @@
+
+
+--- START OF FILE: export.ps1 ---
+
+# ==========================================
+# Export-Code.ps1
+# Combines project source files into one text file for LLM sharing.
+# Excludes CSVs, Binaries, and Git data.
+# ==========================================
+
+$OutputFile = "Full_Project_Source.txt"
+$CurrentLocation = Get-Location
+
+# 1. Extensions to Include (Whitelist approach is cleaner for LLMs)
+# We include Go files, Module definitions, Markdown docs, and PowerShell scripts.
+$IncludeExtensions = @(".go", ".mod", ".md", ".ps1", ".json")
+
+# 2. Specific folders to ignore completely
+$IgnoreFolders = @(".git", ".vs", "bin", "assets", "data") 
+
+# Clear previous export if it exists
+if (Test-Path $OutputFile) {
+    Remove-Item $OutputFile
+}
+
+Write-Host "Scanning for source files..." -ForegroundColor Cyan
+
+# Get all files recursively
+$Files = Get-ChildItem -Path $CurrentLocation -Recurse -File | Where-Object {
+    $file = $_
+    
+    # Check if file is inside an ignored folder
+    $parentPath = $file.DirectoryName
+    $isIgnoredFolder = $false
+    foreach ($ignore in $IgnoreFolders) {
+        if ($parentPath -match "\\$ignore" -or $parentPath -match "/$ignore") {
+            $isIgnoredFolder = $true
+            break
+        }
+    }
+
+    # Filter Logic:
+    # 1. Must NOT be in ignored folder
+    # 2. Extension must be in whitelist OR NOT be .csv (Double safety)
+    # 3. Must not be the output file itself
+    if ($isIgnoredFolder) { return $false }
+    if ($file.Name -eq $OutputFile) { return $false }
+    if ($file.Extension -eq ".csv") { return $false } # Explicitly excluding CSV
+    
+    # Only allow specific source extensions
+    if ($IncludeExtensions -contains $file.Extension) { return $true }
+    
+    return $false
+}
+
+# Create the output file
+New-Item -Path $OutputFile -ItemType File -Force | Out-Null
+
+# Loop through files and append content
+foreach ($file in $Files) {
+    # Get relative path for cleaner context (e.g., "internal/ui/app.go")
+    $relativePath = $file.FullName.Replace($CurrentLocation.Path + "\", "").Replace("\", "/")
+
+    Write-Host "Exporting: $relativePath" -ForegroundColor Gray
+
+    # Create Header
+    $header = "`n`n--- START OF FILE: $relativePath ---`n"
+    Add-Content -Path $OutputFile -Value $header -Encoding UTF8
+
+    # Read and Append Content
+    $content = Get-Content -Path $file.FullName -Raw -Encoding UTF8
+    Add-Content -Path $OutputFile -Value $content -Encoding UTF8
+}
+
+Write-Host "Done!" -ForegroundColor Green
+Write-Host "Source code exported to: $OutputFile" -ForegroundColor Yellow
+
+
+--- START OF FILE: go.mod ---
+
+module go-tts
+
+go 1.23.8
+
+toolchain go1.24.10
+
+require gioui.org v0.9.0
+
+require (
+	gioui.org/shader v1.0.8 // indirect
+	github.com/davecgh/go-spew v1.1.1 // indirect
+	github.com/go-text/typesetting v0.3.0 // indirect
+	github.com/pmezard/go-difflib v1.0.0 // indirect
+	github.com/stretchr/objx v0.5.2 // indirect
+	github.com/stretchr/testify v1.11.1 // indirect
+	golang.org/x/exp/shiny v0.0.0-20250408133849-7e4ce0ab07d0 // indirect
+	golang.org/x/image v0.26.0 // indirect
+	golang.org/x/sys v0.33.0 // indirect
+	golang.org/x/text v0.24.0 // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
+)
+
+
+
+--- START OF FILE: cmd/tts/main.go ---
+
+package main
+
+import (
+	"log"
+	"os"
+	"path/filepath"
+
+	"go-tts/config"
+	"go-tts/internal/integration/jira"
+	"go-tts/internal/repository"
+	"go-tts/internal/service"
+	"go-tts/internal/ui"
+
+	"gioui.org/app"
+)
+
+func main() {
+	// 1. Config
+	cfg := config.Load()
+
+	// 2. Data Layer
+	ttsRepo := repository.NewTTSRepository(filepath.Join(cfg.DataDir, "tts.csv"))
+	registryRepo := repository.NewRegistryRepository(filepath.Join(cfg.DataDir, "registry.csv"))
+
+	// 3. Integration Layer
+	jiraClient := jira.NewClient(cfg.JiraBaseURL, cfg.JiraUser, cfg.JiraToken)
+
+	// 4. Service Layer
+	syncService := service.NewSyncService(ttsRepo, jiraClient)
+
+	emailService := service.NewEmailService(ttsRepo, registryRepo)
+
+	// 5. UI Layer
+	myApp := ui.NewUI(syncService, ttsRepo, emailService)
+
+	// 6. Run
+	go func() {
+		// UPDATED: Create window instance directly
+		w := new(app.Window)
+
+		// Set window title
+		w.Option(app.Title("Go TTS Manager"))
+
+		if err := myApp.Run(w); err != nil {
+			log.Fatal(err)
+		}
+		os.Exit(0)
+	}()
+
+	app.Main()
+}
+
+
+
+--- START OF FILE: config/config.go ---
+
+package config
+
+type Config struct {
+	JiraBaseURL string
+	JiraUser    string
+	JiraToken   string
+	DataDir     string
+}
+
+func Load() *Config {
+	return &Config{
+		JiraBaseURL: "https://jira.glowbyteconsulting.com",
+		DataDir:     "./data",
+	}
+}
+
+
+
+--- START OF FILE: internal/integration/jira/client.go ---
+
+package jira
+
+import "net/http"
+
+type Client struct {
+	baseURL    string
+	httpClient *http.Client
+	authHeader string
+}
+
+func NewClient(baseURL, user, token string) *Client {
+	return &Client{
+		baseURL:    baseURL,
+		httpClient: &http.Client{},
+		// authHeader generation logic here...
+	}
+}
+
+
+
+--- START OF FILE: internal/integration/jira/worklog.go ---
+
+package jira
+
+import "time"
+
+type WorklogPayload struct {
+	Comment          string `json:"comment"`
+	Started          string `json:"started"`
+	TimeSpentSeconds int    `json:"timeSpentSeconds"`
+}
+
+func (c *Client) LogWork(issueKey string, date time.Time, durationSec int, comment string) error {
+	// HTTP POST logic to Jira REST API
+	return nil
+}
+
+
+
+--- START OF FILE: internal/model/registry.go ---
+
+package model
+
+type RegistryEntry struct {
+	Task          string
+	Issue         string
+	Hyperlink     string
+	MailIssueName string
+}
+
+
+
+--- START OF FILE: internal/model/tracker.go ---
+
+package model
+
+type TrackerTask struct {
+	LastDate   string
+	Task       string
+	Status     string
+	Comment    string
+	TimeLogged string
+	Issue      string
+}
+
+
+
+--- START OF FILE: internal/model/tts.go ---
+
+package model
+
+import "time"
+
+type TTSLogEntry struct {
+	Date      time.Time
+	Task      string
+	Comment   string
+	From      string
+	To        string
+	Spent     time.Duration
+	Issue     string
+	IsReady   bool
+	IsLogged  bool
+	LogErrors string
+}
+
+
+
+--- START OF FILE: internal/repository/csv_store_test.go ---
+
+package repository
+
+import (
+	"os"
+	"path/filepath"
+	"reflect"
+	"testing"
+)
+
+func TestReadWriteCSV(t *testing.T) {
+	tmpdir, err := os.MkdirTemp("", "csv-test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpdir)
+
+	filePath := filepath.Join(tmpdir, "test.csv")
+	testData := [][]string{
+		{"header1", "header2"},
+		{"value1", "value2"},
+		{"value3", "value4"},
+	}
+
+	err = WriteCSV(filePath, testData)
+	if err != nil {
+		t.Fatalf("WriteCSV failed: %v", err)
+	}
+
+	readData, err := ReadCSV(filePath)
+	if err != nil {
+		t.Fatalf("ReadCSV failed: %v", err)
+	}
+
+	if !reflect.DeepEqual(testData, readData) {
+		t.Errorf("Read data does not match written data.\nGot: %v\nWant: %v", readData, testData)
+	}
+}
+
+
+
+--- START OF FILE: internal/repository/csv_store.go ---
+
+package repository
+
+import (
+	"encoding/csv"
+	"os"
+	"sync"
+)
+
+var fileMutex = &sync.Mutex{}
+
+// ReadCSV reads a CSV file and returns its content as a slice of slices of strings.
+func ReadCSV(path string) ([][]string, error) {
+	fileMutex.Lock()
+	defer fileMutex.Unlock()
+
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	reader := csv.NewReader(file)
+	records, err := reader.ReadAll()
+	if err != nil {
+		return nil, err
+	}
+
+	return records, nil
+}
+
+// WriteCSV writes a slice of slices of strings to a CSV file.
+func WriteCSV(path string, data [][]string) error {
+	fileMutex.Lock()
+	defer fileMutex.Unlock()
+
+	file, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	writer := csv.NewWriter(file)
+	defer writer.Flush()
+
+	for _, record := range data {
+		if err := writer.Write(record); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+
+
+--- START OF FILE: internal/repository/interfaces.go ---
+
+package repository
+
+import "go-tts/internal/model"
+
+type TTSRepository interface {
+	LoadAll() ([]model.TTSLogEntry, error)
+	SaveAll([]model.TTSLogEntry) error
+	Save(model.TTSLogEntry) error
+}
+
+type RegistryRepository interface {
+	LoadAll() ([]model.RegistryEntry, error)
+	SaveAll([]model.RegistryEntry) error
+	Save(model.RegistryEntry) error
+}
+
+
+
+--- START OF FILE: internal/repository/registry_repo.go ---
+
+package repository
+
+import (
+	"fmt"
+	"go-tts/internal/model"
+)
+
+// csvRegistryRepository handles the key-value mapping for Task Name -> Issue Key.
+type csvRegistryRepository struct {
+	filePath string
+}
+
+// NewRegistryRepository creates a new RegistryRepository.
+func NewRegistryRepository(filePath string) RegistryRepository {
+	return &csvRegistryRepository{filePath: filePath}
+}
+
+// LoadAll loads all registry entries from the CSV file.
+func (r *csvRegistryRepository) LoadAll() ([]model.RegistryEntry, error) {
+	records, err := ReadCSV(r.filePath)
+	if err != nil {
+		return nil, err
+	}
+
+	entries := make([]model.RegistryEntry, 0, len(records)-1)
+	for i, record := range records {
+		if i == 0 { // Skip header row
+			continue
+		}
+
+		if len(record) != 4 {
+			return nil, fmt.Errorf("invalid record length at line %d: expected 4, got %d", i+1, len(record))
+		}
+		entry := model.RegistryEntry{
+			Task:          record[0],
+			Issue:         record[1],
+			Hyperlink:     record[2],
+			MailIssueName: record[3],
+		}
+		entries = append(entries, entry)
+	}
+
+	return entries, nil
+}
+
+// SaveAll saves all registry entries to the CSV file.
+func (r *csvRegistryRepository) SaveAll(entries []model.RegistryEntry) error {
+	records := make([][]string, 0, len(entries)+1)
+	records = append(records, []string{"Task", "Issue", "Hyperlink", "MailIssueName"})
+
+	for _, entry := range entries {
+		records = append(records, []string{entry.Task, entry.Issue, entry.Hyperlink, entry.MailIssueName})
+	}
+
+	return WriteCSV(r.filePath, records)
+}
+
+// Save saves a single registry entry to the CSV file.
+func (r *csvRegistryRepository) Save(entry model.RegistryEntry) error {
+	entries, err := r.LoadAll()
+	if err != nil {
+		return err
+	}
+
+	found := false
+	for i, e := range entries {
+		if e.Task == entry.Task {
+			entries[i] = entry
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		entries = append(entries, entry)
+	}
+
+	return r.SaveAll(entries)
+}
+
+
+
+--- START OF FILE: internal/repository/tts_repo_test.go ---
+
+package repository
+
+import (
+	"go-tts/internal/model"
+	"os"
+	"path/filepath"
+	"reflect"
+	"testing"
+	"time"
+)
+
+func TestTTSRepository_LoadAll(t *testing.T) {
+	tmpdir, err := os.MkdirTemp("", "tts-repo-test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpdir)
+
+	filePath := filepath.Join(tmpdir, "tts.csv")
+	csvData := `Date,Task,Comment,From,To,Spent,IsReady,IsLogged,Issue
+2023-10-27,Task 1,Comment 1,10:00,11:00,1h0m0s,1,0,ISSUE-1
+2023-10-28,Task 2,Comment 2,14:00,15:30,1h30m0s,0,1,ISSUE-2`
+
+	if err := os.WriteFile(filePath, []byte(csvData), 0644); err != nil {
+		t.Fatalf("Failed to write test CSV file: %v", err)
+	}
+
+	repo := NewTTSRepository(filePath)
+	entries, err := repo.LoadAll()
+	if err != nil {
+		t.Fatalf("LoadAll() failed: %v", err)
+	}
+
+	expectedDate1, _ := time.Parse("2006-01-02", "2023-10-27")
+	expectedDate2, _ := time.Parse("2006-01-02", "2023-10-28")
+	expectedDuration1, _ := time.ParseDuration("1h")
+	expectedDuration2, _ := time.ParseDuration("1h30m")
+
+	expectedEntries := []model.TTSLogEntry{
+		{Date: expectedDate1, Task: "Task 1", Comment: "Comment 1", From: "10:00", To: "11:00", Spent: expectedDuration1, IsReady: true, IsLogged: false, Issue: "ISSUE-1"},
+		{Date: expectedDate2, Task: "Task 2", Comment: "Comment 2", From: "14:00", To: "15:30", Spent: expectedDuration2, IsReady: false, IsLogged: true, Issue: "ISSUE-2"},
+	}
+
+	if !reflect.DeepEqual(entries, expectedEntries) {
+		t.Errorf("LoadAll() returned incorrect data.\nGot: %+v\nWant: %+v", entries, expectedEntries)
+	}
+}
+
+
+
+--- START OF FILE: internal/repository/tts_repo.go ---
+
+package repository
+
+import (
+	"fmt"
+	"go-tts/internal/model"
+	"strconv"
+	"time"
+)
+
+const (
+	dateLayout = "2006-01-02"
+)
+
+// csvTTSRepository implements the TTSRepository interface using a CSV file as storage.
+type csvTTSRepository struct {
+	filePath string
+}
+
+// NewTTSRepository creates a new TTSRepository that uses a CSV file.
+func NewTTSRepository(filePath string) TTSRepository {
+	return &csvTTSRepository{filePath: filePath}
+}
+
+// LoadAll retrieves all TTS log entries from the CSV file.
+func (r *csvTTSRepository) LoadAll() ([]model.TTSLogEntry, error) {
+	records, err := ReadCSV(r.filePath)
+	if err != nil {
+		return nil, err
+	}
+
+	entries := make([]model.TTSLogEntry, 0, len(records)-1)
+	for i, record := range records {
+		if i == 0 { // Skip header row
+			continue
+		}
+
+		entry, err := r.parseRecord(record)
+		if err != nil {
+			return nil, fmt.Errorf("error parsing record at line %d: %w", i+1, err)
+		}
+		entries = append(entries, entry)
+	}
+
+	return entries, nil
+}
+
+// SaveAll saves all TTS log entries to the CSV file.
+func (r *csvTTSRepository) SaveAll(entries []model.TTSLogEntry) error {
+	records := make([][]string, 0, len(entries)+1)
+	records = append(records, []string{"Date", "Task", "Comment", "From", "To", "Spent", "IsReady", "IsLogged", "Issue"})
+
+	for _, entry := range entries {
+		records = append(records, r.formatRecord(entry))
+	}
+
+	return WriteCSV(r.filePath, records)
+}
+
+// Save saves a single TTS log entry to the CSV file.
+func (r *csvTTSRepository) Save(entry model.TTSLogEntry) error {
+	entries, err := r.LoadAll()
+	if err != nil {
+		return err
+	}
+
+	found := false
+	for i, e := range entries {
+		if e.Date == entry.Date && e.Task == entry.Task {
+			entries[i] = entry
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		entries = append(entries, entry)
+	}
+
+	return r.SaveAll(entries)
+}
+
+func (r *csvTTSRepository) parseRecord(record []string) (model.TTSLogEntry, error) {
+	var entry model.TTSLogEntry
+
+	// Date,Task,Comment,From,To,Spent,IsReady,IsLogged,Issue
+	if len(record) != 9 {
+		return entry, fmt.Errorf("invalid record length: expected 9, got %d", len(record))
+	}
+
+	date, err := time.Parse(dateLayout, record[0])
+	if err != nil {
+		return entry, fmt.Errorf("failed to parse date: %w", err)
+	}
+	entry.Date = date
+
+	entry.Task = record[1]
+	entry.Comment = record[2]
+	entry.From = record[3]
+	entry.To = record[4]
+
+	spent, err := time.ParseDuration(record[5])
+	if err != nil {
+		return entry, fmt.Errorf("failed to parse spent duration: %w", err)
+	}
+	entry.Spent = spent
+
+	isReady, err := strconv.ParseBool(record[6])
+	if err != nil {
+		isReady = record[6] == "1"
+	}
+	entry.IsReady = isReady
+
+	isLogged, err := strconv.ParseBool(record[7])
+	if err != nil {
+		isLogged = record[7] == "1"
+	}
+	entry.IsLogged = isLogged
+
+	entry.Issue = record[8]
+
+	return entry, nil
+}
+
+func (r *csvTTSRepository) formatRecord(entry model.TTSLogEntry) []string {
+	isReady := "0"
+	if entry.IsReady {
+		isReady = "1"
+	}
+
+	isLogged := "0"
+	if entry.IsLogged {
+		isLogged = "1"
+	}
+
+	return []string{
+		entry.Date.Format(dateLayout),
+		entry.Task,
+		entry.Comment,
+		entry.From,
+		entry.To,
+		entry.Spent.String(),
+		isReady,
+		isLogged,
+		entry.Issue,
+	}
+}
+
+
+
+--- START OF FILE: internal/service/email_service_test.go ---
+
+package service
+
+import (
+	"errors"
+	"go-tts/internal/model"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+)
+
+func TestEmailService_GenerateReport(t *testing.T) {
+	mockTTSRepo := new(MockTTSRepository)
+	mockRegistryRepo := new(MockRegistryRepository)
+	service := NewEmailService(mockTTSRepo, mockRegistryRepo)
+
+	date := time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC)
+	entries := []model.TTSLogEntry{
+		{Date: date, Task: "Task 1", Comment: "Comment 1", Issue: "Issue 1"},
+		{Date: date, Task: "Task 2", Comment: "Comment 2", Issue: "Issue 1"},
+		{Date: date, Task: "Task 3", Comment: "Comment 3", Issue: "Issue 2"},
+		{Date: time.Date(2023, 1, 2, 0, 0, 0, 0, time.UTC), Task: "Task 4", Comment: "Comment 4", Issue: "Issue 3"},
+	}
+
+	registryEntries := []model.RegistryEntry{
+		{Task: "Task 1", Issue: "Issue 1", MailIssueName: "Mail Issue 1"},
+		{Task: "Task 3", Issue: "Issue 2", MailIssueName: "Mail Issue 2"},
+	}
+
+	mockTTSRepo.On("LoadAll").Return(entries, nil)
+	mockRegistryRepo.On("LoadAll").Return(registryEntries, nil)
+
+	report, err := service.GenerateReport(date)
+	assert.NoError(t, err)
+
+	expectedReport := "(Issue 1) Mail Issue 1:\n    - Comment 1\n    - Comment 2\n(Issue 2) Mail Issue 2:\n    - Comment 3\n"
+	assert.Equal(t, expectedReport, report)
+
+	mockTTSRepo.AssertExpectations(t)
+	mockRegistryRepo.AssertExpectations(t)
+}
+
+func TestEmailService_GenerateReport_ErrorLoadingEntries(t *testing.T) {
+	mockTTSRepo := new(MockTTSRepository)
+	mockRegistryRepo := new(MockRegistryRepository)
+	service := NewEmailService(mockTTSRepo, mockRegistryRepo)
+
+	mockTTSRepo.On("LoadAll").Return([]model.TTSLogEntry(nil), errors.New("error loading entries"))
+
+	_, err := service.GenerateReport(time.Now())
+	assert.Error(t, err)
+
+	mockTTSRepo.AssertExpectations(t)
+}
+
+
+
+--- START OF FILE: internal/service/email_service.go ---
+
+package service
+
+import (
+	"bytes"
+	"fmt"
+	"go-tts/internal/model"
+	"go-tts/internal/repository"
+	"sort"
+	"time"
+)
+
+type EmailService struct {
+	ttsRepo      repository.TTSRepository
+	registryRepo repository.RegistryRepository
+}
+
+func NewEmailService(ttsRepo repository.TTSRepository, registryRepo repository.RegistryRepository) *EmailService {
+	return &EmailService{
+		ttsRepo:      ttsRepo,
+		registryRepo: registryRepo,
+	}
+}
+
+func (s *EmailService) GenerateReport(date time.Time) (string, error) {
+	// 1. Load all TTS rows.
+	entries, err := s.ttsRepo.LoadAll()
+	if err != nil {
+		return "", err
+	}
+
+	// 2. Filter where Date == SelectedDate.
+	var filteredEntries []model.TTSLogEntry
+	for _, entry := range entries {
+		if entry.Date.Year() == date.Year() && entry.Date.Month() == date.Month() && entry.Date.Day() == date.Day() {
+			filteredEntries = append(filteredEntries, entry)
+		}
+	}
+
+	// 3. Group by Issue.
+	groupedByIssue := make(map[string][]model.TTSLogEntry)
+	for _, entry := range filteredEntries {
+		groupedByIssue[entry.Issue] = append(groupedByIssue[entry.Issue], entry)
+	}
+
+	// 4. Fetch MailIssueName from Registry.
+	registryEntries, err := s.registryRepo.LoadAll()
+	if err != nil {
+		return "", err
+	}
+	issueMailNameMap := make(map[string]string)
+	for _, entry := range registryEntries {
+		issueMailNameMap[entry.Issue] = entry.MailIssueName
+	}
+
+	// 5. Format the string.
+	var report bytes.Buffer
+	var issues []string
+	for issue := range groupedByIssue {
+		issues = append(issues, issue)
+	}
+	sort.Strings(issues)
+
+	for _, issue := range issues {
+		comments := groupedByIssue[issue]
+		mailIssueName, ok := issueMailNameMap[issue]
+		if !ok {
+			mailIssueName = "General"
+		}
+		report.WriteString(fmt.Sprintf("(%s) %s:\n", issue, mailIssueName))
+		for _, comment := range comments {
+			report.WriteString(fmt.Sprintf("    - %s\n", comment.Comment))
+		}
+	}
+
+	return report.String(), nil
+}
+
+
+
+--- START OF FILE: internal/service/mocks_test.go ---
+
+package service
+
+import (
+	"go-tts/internal/model"
+
+	"github.com/stretchr/testify/mock"
+)
+
+// MockTTSRepository is a mock implementation of the TTSRepository interface.
+type MockTTSRepository struct {
+	mock.Mock
+}
+
+func (m *MockTTSRepository) LoadAll() ([]model.TTSLogEntry, error) {
+	args := m.Called()
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]model.TTSLogEntry), args.Error(1)
+}
+
+func (m *MockTTSRepository) SaveAll(entries []model.TTSLogEntry) error {
+	args := m.Called(entries)
+	return args.Error(0)
+}
+
+func (m *MockTTSRepository) Save(entry model.TTSLogEntry) error {
+	args := m.Called(entry)
+	return args.Error(0)
+}
+
+// MockRegistryRepository is a mock implementation of the RegistryRepository interface.
+type MockRegistryRepository struct {
+	mock.Mock
+}
+
+func (m *MockRegistryRepository) LoadAll() ([]model.RegistryEntry, error) {
+	args := m.Called()
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]model.RegistryEntry), args.Error(1)
+}
+
+func (m *MockRegistryRepository) SaveAll(entries []model.RegistryEntry) error {
+	args := m.Called(entries)
+	return args.Error(0)
+}
+
+func (m *MockRegistryRepository) Save(entry model.RegistryEntry) error {
+	args := m.Called(entry)
+	return args.Error(0)
+}
+
+
+
+--- START OF FILE: internal/service/sync_service.go ---
+
+package service
+
+import (
+	"go-tts/internal/integration/jira"
+	"go-tts/internal/repository"
+)
+
+type SyncService struct {
+	ttsRepo    repository.TTSRepository
+	jiraClient *jira.Client
+}
+
+func NewSyncService(repo repository.TTSRepository, client *jira.Client) *SyncService {
+	return &SyncService{
+		ttsRepo:    repo,
+		jiraClient: client,
+	}
+}
+
+func (s *SyncService) SyncApprovedWork() error {
+	// 1. Load Repo
+	// 2. Filter Ready & Not Logged
+	// 3. Loop -> jiraClient.LogWork
+	// 4. Update Repo IsLogged = true
+	// 5. Save Repo
+	return nil
+}
+
+
+
+--- START OF FILE: internal/service/tts_service_test.go ---
+
+package service
+
+import (
+	"go-tts/internal/model"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+)
+
+
+func TestTTSService_CalculateDuration(t *testing.T) {
+	service := NewTTSService(nil, nil)
+
+	testCases := []struct {
+		name     string
+		from     string
+		to       string
+		expected string
+		hasError bool
+	}{
+		{"Valid duration", "10:00", "11:30", "1h 30m", false},
+		{"Invalid from time", "invalid", "11:30", "", true},
+		{"Invalid to time", "10:00", "invalid", "", true},
+		{"Zero duration", "10:00", "10:00", "0h 0m", false},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			duration, err := service.CalculateDuration(tc.from, tc.to)
+
+			if tc.hasError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, tc.expected, duration)
+			}
+		})
+	}
+}
+
+func TestTTSService_GetIssueForTask(t *testing.T) {
+	mockRegistryRepo := new(MockRegistryRepository)
+	service := NewTTSService(nil, mockRegistryRepo)
+
+	registryEntries := []model.RegistryEntry{
+		{Task: "Task 1", Issue: "Issue 1"},
+		{Task: "Task 2", Issue: "Issue 2"},
+	}
+
+	mockRegistryRepo.On("LoadAll").Return(registryEntries, nil)
+
+	issue, err := service.GetIssueForTask("Task 1")
+	assert.NoError(t, err)
+	assert.Equal(t, "Issue 1", issue)
+
+	issue, err = service.GetIssueForTask("Non-existent task")
+	assert.NoError(t, err)
+	assert.Equal(t, "", issue)
+
+	mockRegistryRepo.AssertExpectations(t)
+}
+
+
+
+--- START OF FILE: internal/service/tts_service.go ---
+
+package service
+
+import (
+	"fmt"
+	"go-tts/internal/repository"
+	"time"
+)
+
+type TTSService struct {
+	ttsRepo      repository.TTSRepository
+	registryRepo repository.RegistryRepository
+}
+
+func NewTTSService(ttsRepo repository.TTSRepository, registryRepo repository.RegistryRepository) *TTSService {
+	return &TTSService{
+		ttsRepo:      ttsRepo,
+		registryRepo: registryRepo,
+	}
+}
+
+func (s *TTSService) CalculateDuration(from, to string) (string, error) {
+	fromTime, err := time.Parse("15:04", from)
+	if err != nil {
+		return "", fmt.Errorf("invalid 'from' time format: %w", err)
+	}
+
+	toTime, err := time.Parse("15:04", to)
+	if err != nil {
+		return "", fmt.Errorf("invalid 'to' time format: %w", err)
+	}
+
+	duration := toTime.Sub(fromTime)
+
+	hours := int(duration.Hours())
+	minutes := int(duration.Minutes()) % 60
+
+	return fmt.Sprintf("%dh %dm", hours, minutes), nil
+}
+
+func (s *TTSService) GetIssueForTask(taskName string) (string, error) {
+	registryEntries, err := s.registryRepo.LoadAll()
+	if err != nil {
+		return "", err
+	}
+
+	for _, entry := range registryEntries {
+		if entry.Task == taskName {
+			return entry.Issue, nil
+		}
+	}
+
+	return "", nil
+}
+
+
+
+--- START OF FILE: internal/ui/app.go ---
+
+package ui
+
+import (
+	"fmt"
+	"io"
+	"strings"
+	"time"
+	"go-tts/internal/model"
+	"go-tts/internal/repository"
+	"go-tts/internal/service"
+	"go-tts/internal/ui/pages"
+
+	"gioui.org/app"
+	"gioui.org/io/clipboard"
+	"gioui.org/layout"
+	"gioui.org/op"
+	"gioui.org/widget"
+	"gioui.org/widget/material"
+)
+
+type UI struct {
+	Theme        *material.Theme
+	CurrentPage  int
+	TTSPage      *pages.TTSPage
+	EmailPage    *pages.EmailPage
+	RegistryPage *pages.RegistryPage
+	NavButtons   []widget.Clickable
+	ttsRepo      repository.TTSRepository
+	registryRepo repository.RegistryRepository
+	syncService  *service.SyncService
+	emailService *service.EmailService
+}
+
+func NewUI(syncService *service.SyncService, ttsRepo repository.TTSRepository, registryRepo repository.RegistryRepository, emailService *service.EmailService) *UI {
+	th := material.NewTheme()
+	ttsPage := pages.NewTTSPage(th)
+	emailPage := pages.NewEmailPage(th)
+	registryPage := pages.NewRegistryPage(th)
+
+	ui := &UI{
+		Theme:        th,
+		TTSPage:      ttsPage,
+		EmailPage:    emailPage,
+		RegistryPage: registryPage,
+		NavButtons:   make([]widget.Clickable, 3),
+		ttsRepo:      ttsRepo,
+		registryRepo: registryRepo,
+		syncService:  syncService,
+		emailService: emailService,
+	}
+
+	ttsPage.Table.OnRowChanged = func(rowIndex int) {
+		row := ttsPage.Table.Rows[rowIndex]
+		entry := model.TTSLogEntry{
+			Task:    row.TaskEditor.Text(),
+			Comment: row.CommentEditor.Text(),
+			From:    row.FromEditor.Editor.Text(),
+			To:      row.ToEditor.Editor.Text(),
+		}
+		ttsRepo.Save(entry)
+	}
+
+	registryPage.Table.OnRowChanged = func(rowIndex int) {
+		row := registryPage.Table.Rows[rowIndex]
+		entry := model.RegistryEntry{
+			Task:    row.TaskEditor.Text(),
+			Comment: row.CommentEditor.Text(),
+		}
+		registryRepo.Save(entry)
+	}
+
+	return ui
+}
+
+func (u *UI) Run(w *app.Window) error {
+	var ops op.Ops
+
+	// v0.9.0 Event Loop
+	for {
+		// w.Event() blocks until an event occurs
+		switch e := w.Event().(type) {
+
+		case app.DestroyEvent:
+			return e.Err
+
+		case app.FrameEvent:
+			// app.NewContext creates the layout context (replaces layout.NewContext)
+			gtx := app.NewContext(&ops, e)
+
+			u.Layout(gtx)
+
+			// Render the frame
+			e.Frame(gtx.Ops)
+		}
+	}
+}
+
+func (u *UI) Layout(gtx layout.Context) layout.Dimensions {
+	// Handle TTS Page button clicks
+	if u.TTSPage.AddBtn.Clicked(gtx) {
+		u.TTSPage.Table.AddRow()
+	}
+	if u.TTSPage.DeleteBtn.Clicked(gtx) {
+		u.TTSPage.Table.DeleteRow(u.TTSPage.Table.SelectedRow)
+	}
+	if u.TTSPage.SyncBtn.Clicked(gtx) {
+		u.syncService.SyncApprovedWork()
+	}
+
+	// Handle Registry Page button clicks
+	if u.RegistryPage.AddBtn.Clicked(gtx) {
+		u.RegistryPage.Table.AddRow()
+	}
+	if u.RegistryPage.DeleteBtn.Clicked(gtx) {
+		u.RegistryPage.Table.DeleteRow(u.RegistryPage.Table.SelectedRow)
+	}
+
+	// Handle Email Page button clicks
+	if u.EmailPage.Datepicker.GenerateBtn.Clicked(gtx) {
+		year := u.EmailPage.Datepicker.YearEditor.Text()
+		month := u.EmailPage.Datepicker.MonthEditor.Text()
+		day := u.EmailPage.Datepicker.DayEditor.Text()
+		dateStr := fmt.Sprintf("%s-%s-%s", year, month, day)
+		// Basic validation, you might want to improve this
+		if date, err := time.Parse("2006-1-2", dateStr); err == nil {
+			emailBody, err := u.emailService.GenerateReport(date)
+			if err != nil {
+				// Handle error, maybe show a dialog or a message in the UI
+				u.EmailPage.Editor.SetText("Error generating report: " + err.Error())
+			} else {
+				u.EmailPage.Editor.SetText(emailBody)
+			}
+		} else {
+			u.EmailPage.Editor.SetText("Invalid date format. Please use YYYY-MM-DD.")
+		}
+	}
+	if u.EmailPage.CopyBtn.Clicked(gtx) {
+		reader := strings.NewReader(u.EmailPage.Editor.Text())
+		gtx.Execute(clipboard.WriteCmd{Data: io.NopCloser(reader)})
+	}
+
+	// Handle navigation
+	if u.NavButtons[0].Clicked(gtx) {
+		u.CurrentPage = 0
+	}
+	if u.NavButtons[1].Clicked(gtx) {
+		u.CurrentPage = 1
+	}
+	if u.NavButtons[2].Clicked(gtx) {
+		u.CurrentPage = 2
+	}
+
+	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return layout.Flex{}.Layout(gtx,
+				layout.Flexed(1, material.Button(u.Theme, &u.NavButtons[0], "TTS").Layout),
+				layout.Flexed(1, material.Button(u.Theme, &u.NavButtons[1], "Email").Layout),
+				layout.Flexed(1, material.Button(u.Theme, &u.NavButtons[2], "Registry").Layout),
+			)
+		}),
+		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+			switch u.CurrentPage {
+			case 0:
+				return u.TTSPage.Layout(gtx)
+			case 1:
+				return u.EmailPage.Layout(gtx)
+			case 2:
+				return u.RegistryPage.Layout(gtx)
+			default:
+				return layout.Dimensions{}
+			}
+		}),
+	)
+}
+
+
+
+--- START OF FILE: internal/ui/pages/page_email.go ---
+
+package pages
+
+import (
+	"gioui.org/layout"
+	"gioui.org/widget"
+	"gioui.org/widget/material"
+	"go-tts/internal/ui/widgets"
+)
+
+type EmailPage struct {
+	Theme      *material.Theme
+	Editor     widget.Editor
+	CopyBtn    widget.Clickable
+	Datepicker *widgets.Datepicker
+}
+
+func NewEmailPage(th *material.Theme) *EmailPage {
+	return &EmailPage{
+		Theme:      th,
+		Datepicker: widgets.NewDatepicker(),
+	}
+}
+
+func (p *EmailPage) Layout(gtx layout.Context) layout.Dimensions {
+	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return p.Datepicker.Layout(gtx, p.Theme)
+		}),
+		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+			p.Editor.ReadOnly = true
+			return material.Editor(p.Theme, &p.Editor, "Email").Layout(gtx)
+		}),
+		layout.Rigid(
+			material.Button(p.Theme, &p.CopyBtn, "Copy to Clipboard").Layout,
+		),
+	)
+}
+
+
+
+--- START OF FILE: internal/ui/pages/page_registry.go ---
+
+package pages
+
+import (
+	"gioui.org/layout"
+	"gioui.org/widget"
+	"gioui.org/widget/material"
+	"go-tts/internal/ui/widgets"
+)
+
+type RegistryPage struct {
+	Theme *material.Theme
+	Table *widgets.EditableTable
+	AddBtn   widget.Clickable
+	DeleteBtn widget.Clickable
+}
+
+func NewRegistryPage(th *material.Theme) *RegistryPage {
+	return &RegistryPage{
+		Theme: th,
+		Table: widgets.NewEditableTable([]widgets.Column{
+			widgets.TaskColumn,
+			widgets.CommentColumn,
+		}),
+	}
+}
+
+func (p *RegistryPage) Layout(gtx layout.Context) layout.Dimensions {
+	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+			return p.Table.Layout(gtx, p.Theme)
+		}),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return layout.Flex{}.Layout(gtx,
+				layout.Flexed(1, material.Button(p.Theme, &p.AddBtn, "Add").Layout),
+				layout.Flexed(1, material.Button(p.Theme, &p.DeleteBtn, "Delete").Layout),
+			)
+		}),
+	)
+}
+
+
+
+--- START OF FILE: internal/ui/pages/page_tts.go ---
+
+package pages
+
+import (
+	"gioui.org/layout"
+	"gioui.org/widget/material"
+	"go-tts/internal/ui/widgets"
+	"gioui.org/widget"
+)
+
+type TTSPage struct {
+	Theme     *material.Theme
+	Table     *widgets.EditableTable
+	AddBtn    widget.Clickable
+	DeleteBtn widget.Clickable
+	SyncBtn   widget.Clickable
+}
+
+func NewTTSPage(th *material.Theme) *TTSPage {
+	return &TTSPage{
+		Theme: th,
+		Table: widgets.NewEditableTable([]widgets.Column{
+			widgets.TaskColumn,
+			widgets.CommentColumn,
+			widgets.FromColumn,
+			widgets.ToColumn,
+		}),
+	}
+}
+
+func (p *TTSPage) Layout(gtx layout.Context) layout.Dimensions {
+	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+			return p.Table.Layout(gtx, p.Theme)
+		}),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return layout.Flex{}.Layout(gtx,
+				layout.Flexed(1, material.Button(p.Theme, &p.AddBtn, "Add").Layout),
+				layout.Flexed(1, material.Button(p.Theme, &p.DeleteBtn, "Delete").Layout),
+				layout.Flexed(1, material.Button(p.Theme, &p.SyncBtn, "Sync to Jira").Layout),
+			)
+		}),
+	)
+}
+
+
+
+--- START OF FILE: internal/ui/widgets/datepicker.go ---
+
+package widgets
+
+import (
+	"fmt"
+	"time"
+
+	"gioui.org/layout"
+	"gioui.org/widget"
+	"gioui.org/widget/material"
+)
+
+type Datepicker struct {
+	YearEditor  widget.Editor
+	MonthEditor widget.Editor
+	DayEditor   widget.Editor
+	GenerateBtn widget.Clickable
+}
+
+func NewDatepicker() *Datepicker {
+	now := time.Now()
+	dp := &Datepicker{}
+	dp.YearEditor.SetText(fmt.Sprintf("%d", now.Year()))
+	dp.MonthEditor.SetText(fmt.Sprintf("%d", now.Month()))
+	dp.DayEditor.SetText(fmt.Sprintf("%d", now.Day()))
+	return dp
+}
+
+func (dp *Datepicker) Layout(gtx layout.Context, th *material.Theme) layout.Dimensions {
+	return layout.Flex{}.Layout(gtx,
+		layout.Rigid(material.Editor(th, &dp.YearEditor, "YYYY").Layout),
+		layout.Rigid(material.Editor(th, &dp.MonthEditor, "MM").Layout),
+		layout.Rigid(material.Editor(th, &dp.DayEditor, "DD").Layout),
+		layout.Rigid(material.Button(th, &dp.GenerateBtn, "Generate").Layout),
+	)
+}
+
+
+
+--- START OF FILE: internal/ui/widgets/editable_table.go ---
+
+package widgets
+
+import (
+	"gioui.org/layout"
+	"gioui.org/widget"
+	"gioui.org/widget/material"
+)
+
+type TableRow struct {
+	TaskEditor    widget.Editor
+	CommentEditor widget.Editor
+	FromEditor    TimeEditor
+	ToEditor      TimeEditor
+	Clickable     widget.Clickable
+}
+
+type Column int
+
+const (
+	TaskColumn Column = iota
+	CommentColumn
+	FromColumn
+	ToColumn
+)
+
+type EditableTable struct {
+	ListState    layout.List
+	Rows         []*TableRow
+	Columns      []Column
+	OnRowChanged func(rowIndex int)
+	SelectedRow  int
+}
+
+func NewEditableTable(columns []Column) *EditableTable {
+	return &EditableTable{
+		Columns: columns,
+	}
+}
+
+func (t *EditableTable) AddRow() {
+	t.Rows = append(t.Rows, &TableRow{
+		TaskEditor:    widget.Editor{SingleLine: true, Submit: true},
+		CommentEditor: widget.Editor{SingleLine: true, Submit: true},
+		FromEditor:    TimeEditor{Editor: widget.Editor{SingleLine: true, Submit: true}},
+		ToEditor:      TimeEditor{Editor: widget.Editor{SingleLine: true, Submit: true}},
+	})
+}
+
+func (t *EditableTable) DeleteRow(rowIndex int) {
+	if rowIndex >= 0 && rowIndex < len(t.Rows) {
+		t.Rows = append(t.Rows[:rowIndex], t.Rows[rowIndex+1:]...)
+	}
+}
+
+func (t *EditableTable) Layout(gtx layout.Context, th *material.Theme) layout.Dimensions {
+	return t.ListState.Layout(gtx, len(t.Rows), func(gtx layout.Context, rowIndex int) layout.Dimensions {
+		// Safety check: ListState might try to layout an index that was just deleted if state hasn't synced
+		if rowIndex < 0 || rowIndex >= len(t.Rows) {
+			return layout.Dimensions{}
+		}
+
+		row := t.Rows[rowIndex]
+
+		// 1. Handle Selection
+		if row.Clickable.Clicked(gtx) {
+			t.SelectedRow = rowIndex
+		}
+
+		// 2. Event Handling Loop
+		// REPLACED CODE START
+		checkForSubmit := func(editor *widget.Editor) {
+			for {
+				// In Gio v0.9.0+, use Update(gtx) to get events
+				e, ok := editor.Update(gtx)
+				if !ok {
+					break
+				}
+				if _, ok := e.(widget.SubmitEvent); ok {
+					if t.OnRowChanged != nil {
+						t.OnRowChanged(rowIndex)
+					}
+				}
+			}
+		}
+
+		checkForSubmit(&row.TaskEditor)
+		checkForSubmit(&row.CommentEditor)
+		checkForSubmit(&row.FromEditor.Editor)
+		checkForSubmit(&row.ToEditor.Editor)
+
+		// 3. Layout (Drawing)
+		return row.Clickable.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			children := make([]layout.FlexChild, 0, len(t.Columns))
+
+			for _, col := range t.Columns {
+				// Capture loop variable
+				c := col
+				switch c {
+				case TaskColumn:
+					children = append(children, layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+						return material.Editor(th, &row.TaskEditor, "Task").Layout(gtx)
+					}))
+				case CommentColumn:
+					children = append(children, layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+						return material.Editor(th, &row.CommentEditor, "Comment").Layout(gtx)
+					}))
+				case FromColumn:
+					children = append(children, layout.Flexed(0.5, func(gtx layout.Context) layout.Dimensions {
+						return row.FromEditor.Layout(gtx, th)
+					}))
+				case ToColumn:
+					children = append(children, layout.Flexed(0.5, func(gtx layout.Context) layout.Dimensions {
+						return row.ToEditor.Layout(gtx, th)
+					}))
+				}
+			}
+			return layout.Flex{Axis: layout.Horizontal, Spacing: layout.SpaceBetween}.Layout(gtx, children...)
+		})
+	})
+}
+
+
+
+--- START OF FILE: internal/ui/widgets/time_editor.go ---
+
+package widgets
+
+import (
+	"regexp"
+
+	"gioui.org/layout"
+	"gioui.org/widget"
+	"gioui.org/widget/material"
+)
+
+var timeRegex = regexp.MustCompile(`^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$`)
+
+type TimeEditor struct {
+	widget.Editor
+	OnSubmit func()
+	lastText string
+}
+
+func (t *TimeEditor) Frame() {
+	if t.Text() != t.lastText {
+		if timeRegex.MatchString(t.Text()) {
+			if t.OnSubmit != nil {
+				t.OnSubmit()
+			}
+		}
+	}
+	t.lastText = t.Text()
+}
+
+func (t *TimeEditor) Layout(gtx layout.Context, th *material.Theme) layout.Dimensions {
+	t.Frame()
+	return material.Editor(th, &t.Editor, "HH:MM").Layout(gtx)
+}
+
+
+
+--- START OF FILE: pkg/util/time_fmt.go ---
+
+package util
+
+import "time"
+
+// ParseDuration converts "1h 30m" to time.Duration
+func ParseDuration(s string) (time.Duration, error) {
+	return time.ParseDuration("1h30m") // Mock
+}
+

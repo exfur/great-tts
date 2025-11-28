@@ -67,15 +67,18 @@ func (t *EditableTable) Layout(gtx layout.Context, th *material.Theme) layout.Di
 		}
 
 		// 2. Event Handling Loop
-		// We check for SubmitEvent (Enter key) on all editors.
-		// We define a helper to reduce code duplication.
+		// REPLACED CODE START
 		checkForSubmit := func(editor *widget.Editor) {
-			for _, e := range editor.Events() {
+			for {
+				// In Gio v0.9.0+, use Update(gtx) to get events
+				e, ok := editor.Update(gtx)
+				if !ok {
+					break
+				}
 				if _, ok := e.(widget.SubmitEvent); ok {
 					if t.OnRowChanged != nil {
 						t.OnRowChanged(rowIndex)
 					}
-					// Move focus or handle specific logic here if needed
 				}
 			}
 		}

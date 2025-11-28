@@ -2,13 +2,13 @@ package ui
 
 import (
 	"fmt"
-	"io"
-	"strings"
-	"time"
 	"go-tts/internal/model"
 	"go-tts/internal/repository"
 	"go-tts/internal/service"
 	"go-tts/internal/ui/pages"
+	"io"
+	"strings"
+	"time"
 
 	"gioui.org/app"
 	"gioui.org/io/clipboard"
@@ -63,8 +63,8 @@ func NewUI(syncService *service.SyncService, ttsRepo repository.TTSRepository, r
 	registryPage.Table.OnRowChanged = func(rowIndex int) {
 		row := registryPage.Table.Rows[rowIndex]
 		entry := model.RegistryEntry{
-			Task:    row.TaskEditor.Text(),
-			Comment: row.CommentEditor.Text(),
+			Task:  row.TaskEditor.Text(),
+			Issue: row.CommentEditor.Text(),
 		}
 		registryRepo.Save(entry)
 	}
