@@ -20,6 +20,7 @@ func main() {
 
 	// 2. Data Layer
 	ttsRepo := repository.NewTTSRepository(filepath.Join(cfg.DataDir, "tts.csv"))
+	registryRepo := repository.NewRegistryRepository(filepath.Join(cfg.DataDir, "registry.csv"))
 
 	// 3. Integration Layer
 	jiraClient := jira.NewClient(cfg.JiraBaseURL, cfg.JiraUser, cfg.JiraToken)
@@ -27,8 +28,10 @@ func main() {
 	// 4. Service Layer
 	syncService := service.NewSyncService(ttsRepo, jiraClient)
 
+	emailService := service.NewEmailService(ttsRepo, registryRepo)
+
 	// 5. UI Layer
-	myApp := ui.NewUI(syncService)
+	myApp := ui.NewUI(syncService, ttsRepo, emailService)
 
 	// 6. Run
 	go func() {
