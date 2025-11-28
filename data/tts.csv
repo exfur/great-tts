@@ -1,0 +1,3 @@
+date,task,comment,from,to,rs,spent,issue,project,is_ready_for_logging,is_logged,log_errors
+2025-11-27,ОРГ. Расходы,Статус план совзон,10:00,10:27,0h 27m,0h 28m,PP-2302,PP,1,0,
+2025-11-27,PI Inside,Dev work,10:27,12:59,2h 31m,2h 39m,PP-2827,PP,1,0,
