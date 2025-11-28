@@ -42,3 +42,38 @@ func (r *csvRegistryRepository) LoadAll() ([]model.RegistryEntry, error) {
 
 	return entries, nil
 }
+
+// SaveAll saves all registry entries to the CSV file.
+func (r *csvRegistryRepository) SaveAll(entries []model.RegistryEntry) error {
+	records := make([][]string, 0, len(entries)+1)
+	records = append(records, []string{"Task", "Issue", "Hyperlink", "MailIssueName"})
+
+	for _, entry := range entries {
+		records = append(records, []string{entry.Task, entry.Issue, entry.Hyperlink, entry.MailIssueName})
+	}
+
+	return WriteCSV(r.filePath, records)
+}
+
+// Save saves a single registry entry to the CSV file.
+func (r *csvRegistryRepository) Save(entry model.RegistryEntry) error {
+	entries, err := r.LoadAll()
+	if err != nil {
+		return err
+	}
+
+	found := false
+	for i, e := range entries {
+		if e.Task == entry.Task {
+			entries[i] = entry
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		entries = append(entries, entry)
+	}
+
+	return r.SaveAll(entries)
+}

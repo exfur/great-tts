@@ -2,13 +2,13 @@ package ui
 
 import (
 	"fmt"
-	"io"
-	"strings"
-	"time"
 	"go-tts/internal/model"
 	"go-tts/internal/repository"
 	"go-tts/internal/service"
 	"go-tts/internal/ui/pages"
+	"io"
+	"strings"
+	"time"
 
 	"gioui.org/app"
 	"gioui.org/io/clipboard"
@@ -23,23 +23,53 @@ type UI struct {
 	CurrentPage  int
 	TTSPage      *pages.TTSPage
 	EmailPage    *pages.EmailPage
+	RegistryPage *pages.RegistryPage
 	NavButtons   []widget.Clickable
 	ttsRepo      repository.TTSRepository
+	registryRepo repository.RegistryRepository
 	syncService  *service.SyncService
 	emailService *service.EmailService
 }
 
-func NewUI(syncService *service.SyncService, ttsRepo repository.TTSRepository, emailService *service.EmailService) *UI {
+func NewUI(syncService *service.SyncService, ttsRepo repository.TTSRepository, registryRepo repository.RegistryRepository, emailService *service.EmailService) *UI {
 	th := material.NewTheme()
-	return &UI{
+	ttsPage := pages.NewTTSPage(th)
+	emailPage := pages.NewEmailPage(th)
+	registryPage := pages.NewRegistryPage(th)
+
+	ui := &UI{
 		Theme:        th,
-		TTSPage:      pages.NewTTSPage(th),
-		EmailPage:    pages.NewEmailPage(th),
-		NavButtons:   make([]widget.Clickable, 2),
+		TTSPage:      ttsPage,
+		EmailPage:    emailPage,
+		RegistryPage: registryPage,
+		NavButtons:   make([]widget.Clickable, 3),
 		ttsRepo:      ttsRepo,
+		registryRepo: registryRepo,
 		syncService:  syncService,
 		emailService: emailService,
 	}
+
+	ttsPage.Table.OnRowChanged = func(rowIndex int) {
+		row := ttsPage.Table.Rows[rowIndex]
+		entry := model.TTSLogEntry{
+			Task:    row.TaskEditor.Text(),
+			Comment: row.CommentEditor.Text(),
+			From:    row.FromEditor.Editor.Text(),
+			To:      row.ToEditor.Editor.Text(),
+		}
+		ttsRepo.Save(entry)
+	}
+
+	registryPage.Table.OnRowChanged = func(rowIndex int) {
+		row := registryPage.Table.Rows[rowIndex]
+		entry := model.RegistryEntry{
+			Task:  row.TaskEditor.Text(),
+			Issue: row.CommentEditor.Text(),
+		}
+		registryRepo.Save(entry)
+	}
+
+	return ui
 }
 
 func (u *UI) Run(w *app.Window) error {
@@ -67,22 +97,22 @@ func (u *UI) Run(w *app.Window) error {
 
 func (u *UI) Layout(gtx layout.Context) layout.Dimensions {
 	// Handle TTS Page button clicks
-	if u.TTSPage.SaveBtn.Clicked(gtx) {
-		entries := make([]model.TTSLogEntry, len(u.TTSPage.Table.Rows))
-		for i, row := range u.TTSPage.Table.Rows {
-			// This is a simplified conversion. A real implementation would need
-			// to handle errors and potentially more complex data types.
-			entries[i] = model.TTSLogEntry{
-				Task:    row.TaskEditor.Text(),
-				Comment: row.CommentEditor.Text(),
-				From:    row.FromEditor.Editor.Text(),
-				To:      row.ToEditor.Editor.Text(),
-			}
-		}
-		u.ttsRepo.SaveAll(entries)
+	if u.TTSPage.AddBtn.Clicked(gtx) {
+		u.TTSPage.Table.AddRow()
+	}
+	if u.TTSPage.DeleteBtn.Clicked(gtx) {
+		u.TTSPage.Table.DeleteRow(u.TTSPage.Table.SelectedRow)
 	}
 	if u.TTSPage.SyncBtn.Clicked(gtx) {
 		u.syncService.SyncApprovedWork()
+	}
+
+	// Handle Registry Page button clicks
+	if u.RegistryPage.AddBtn.Clicked(gtx) {
+		u.RegistryPage.Table.AddRow()
+	}
+	if u.RegistryPage.DeleteBtn.Clicked(gtx) {
+		u.RegistryPage.Table.DeleteRow(u.RegistryPage.Table.SelectedRow)
 	}
 
 	// Handle Email Page button clicks
@@ -116,12 +146,16 @@ func (u *UI) Layout(gtx layout.Context) layout.Dimensions {
 	if u.NavButtons[1].Clicked(gtx) {
 		u.CurrentPage = 1
 	}
+	if u.NavButtons[2].Clicked(gtx) {
+		u.CurrentPage = 2
+	}
 
 	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return layout.Flex{}.Layout(gtx,
 				layout.Flexed(1, material.Button(u.Theme, &u.NavButtons[0], "TTS").Layout),
 				layout.Flexed(1, material.Button(u.Theme, &u.NavButtons[1], "Email").Layout),
+				layout.Flexed(1, material.Button(u.Theme, &u.NavButtons[2], "Registry").Layout),
 			)
 		}),
 		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
@@ -130,6 +164,8 @@ func (u *UI) Layout(gtx layout.Context) layout.Dimensions {
 				return u.TTSPage.Layout(gtx)
 			case 1:
 				return u.EmailPage.Layout(gtx)
+			case 2:
+				return u.RegistryPage.Layout(gtx)
 			default:
 				return layout.Dimensions{}
 			}

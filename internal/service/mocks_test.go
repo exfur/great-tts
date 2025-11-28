@@ -24,6 +24,11 @@ func (m *MockTTSRepository) SaveAll(entries []model.TTSLogEntry) error {
 	return args.Error(0)
 }
 
+func (m *MockTTSRepository) Save(entry model.TTSLogEntry) error {
+	args := m.Called(entry)
+	return args.Error(0)
+}
+
 // MockRegistryRepository is a mock implementation of the RegistryRepository interface.
 type MockRegistryRepository struct {
 	mock.Mock
@@ -35,4 +40,14 @@ func (m *MockRegistryRepository) LoadAll() ([]model.RegistryEntry, error) {
 		return nil, args.Error(1)
 	}
 	return args.Get(0).([]model.RegistryEntry), args.Error(1)
+}
+
+func (m *MockRegistryRepository) SaveAll(entries []model.RegistryEntry) error {
+	args := m.Called(entries)
+	return args.Error(0)
+}
+
+func (m *MockRegistryRepository) Save(entry model.RegistryEntry) error {
+	args := m.Called(entry)
+	return args.Error(0)
 }
