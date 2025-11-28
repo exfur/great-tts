@@ -2,38 +2,43 @@ package repository
 
 import (
 	"fmt"
+	"go-tts/internal/model"
 )
 
-// RegistryRepository handles the key-value mapping for Task Name -> Issue Key.
-type RegistryRepository struct {
+// csvRegistryRepository handles the key-value mapping for Task Name -> Issue Key.
+type csvRegistryRepository struct {
 	filePath string
 }
 
 // NewRegistryRepository creates a new RegistryRepository.
-func NewRegistryRepository(filePath string) *RegistryRepository {
-	return &RegistryRepository{filePath: filePath}
+func NewRegistryRepository(filePath string) RegistryRepository {
+	return &csvRegistryRepository{filePath: filePath}
 }
 
-// GetTaskIssueMap loads the Task Name -> Issue Key mapping from the CSV file.
-func (r *RegistryRepository) GetTaskIssueMap() (map[string]string, error) {
+// LoadAll loads all registry entries from the CSV file.
+func (r *csvRegistryRepository) LoadAll() ([]model.RegistryEntry, error) {
 	records, err := ReadCSV(r.filePath)
 	if err != nil {
 		return nil, err
 	}
 
-	taskIssueMap := make(map[string]string)
+	entries := make([]model.RegistryEntry, 0, len(records)-1)
 	for i, record := range records {
 		if i == 0 { // Skip header row
 			continue
 		}
 
-		if len(record) != 2 {
-			return nil, fmt.Errorf("invalid record length at line %d: expected 2, got %d", i+1, len(record))
+		if len(record) != 4 {
+			return nil, fmt.Errorf("invalid record length at line %d: expected 4, got %d", i+1, len(record))
 		}
-		taskName := record[0]
-		issueKey := record[1]
-		taskIssueMap[taskName] = issueKey
+		entry := model.RegistryEntry{
+			Task:          record[0],
+			Issue:         record[1],
+			Hyperlink:     record[2],
+			MailIssueName: record[3],
+		}
+		entries = append(entries, entry)
 	}
 
-	return taskIssueMap, nil
+	return entries, nil
 }
