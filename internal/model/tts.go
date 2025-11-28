@@ -8,7 +8,7 @@ type TTSLogEntry struct {
 	Comment   string
 	From      string
 	To        string
-	Spent     string // Raw string from CSV
+	Spent     time.Duration
 	Issue     string
 	IsReady   bool
 	IsLogged  bool

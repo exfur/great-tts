@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"os"
+	"path/filepath"
 
 	"go-tts/config"
 	"go-tts/internal/integration/jira"
@@ -18,7 +19,7 @@ func main() {
 	cfg := config.Load()
 
 	// 2. Data Layer
-	ttsRepo := repository.NewTTSRepo(cfg.DataDir)
+	ttsRepo := repository.NewTTSRepository(filepath.Join(cfg.DataDir, "tts.csv"))
 
 	// 3. Integration Layer
 	jiraClient := jira.NewClient(cfg.JiraBaseURL, cfg.JiraUser, cfg.JiraToken)
