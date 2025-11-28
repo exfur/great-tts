@@ -27,8 +27,10 @@ func main() {
 	// 4. Service Layer
 	syncService := service.NewSyncService(ttsRepo, jiraClient)
 
+	emailService := service.NewEmailService(ttsRepo)
+
 	// 5. UI Layer
-	myApp := ui.NewUI(syncService)
+	myApp := ui.NewUI(syncService, ttsRepo, emailService)
 
 	// 6. Run
 	go func() {
